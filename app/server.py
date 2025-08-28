@@ -3,6 +3,7 @@ import os
 import uuid
 import time
 import threading
+import traceback
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form
@@ -44,6 +45,21 @@ def _log(job_id: str, msg: str) -> None:
         f.write(f"[{ts}] {msg}\n")
     # Mirror to container stdout for `docker compose logs -f`
     print(f"[{ts}] ({job_id}) {msg}")
+
+
+def _startup_diag() -> None:
+    """Print basic environment diagnostics at startup to aid debugging."""
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    hf_home = os.getenv("HF_HOME")
+    tok1 = bool(os.getenv("HF_TOKEN"))
+    tok2 = bool(os.getenv("HUGGING_FACE_HUB_TOKEN"))
+    hv = os.getenv("HF_HUB_VERBOSE")
+    ht = os.getenv("HF_HUB_ENABLE_HF_TRANSFER")
+    print(f"[{ts}] (init) HF_HOME={hf_home!r} HF_TOKEN={'set' if tok1 else 'missing'} HUGGING_FACE_HUB_TOKEN={'set' if tok2 else 'missing'} HF_HUB_VERBOSE={hv!r} HF_HUB_ENABLE_HF_TRANSFER={ht!r}")
+
+
+# Emit startup diagnostics once when the module is imported
+_startup_diag()
 
 
 def _heartbeat(job_id: str, t0: float, stop_evt: threading.Event, interval: float = 2.0) -> None:
@@ -118,7 +134,8 @@ async def generate_text(
             _log(uid, f"DONE in {time.time()-t0:.1f}s -> {ply_path}")
             return {"type": "splat", "path": ply_path, "job_id": uid}
     except Exception as e:
-        _log(uid if 'uid' in locals() else 'unknown', f"ERROR: {e}")
+        jid = uid if 'uid' in locals() else 'unknown'
+        _log(jid, f"ERROR: {e}\n{traceback.format_exc()}")
         return JSONResponse(status_code=500, content={"error": str(e), "job_id": (uid if 'uid' in locals() else None)})
 
 
@@ -134,9 +151,9 @@ async def generate_image(
         uid = str(uuid.uuid4())
         _log(uid, f"START image generation: low_vram={low_vram} return_mesh={return_mesh} inpaint_bg={inpaint_bg}")
         hb_stop = threading.Event()
-        hb_thr = threading.Thread(target=_heartbeat, args=(uid, hb_stop), daemon=True)
-        hb_thr.start()
         t0 = time.time()
+        hb_thr = threading.Thread(target=_heartbeat, args=(uid, t0, hb_stop), daemon=True)
+        hb_thr.start()
 
         contents = await image.read()
         pil = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -172,7 +189,8 @@ async def generate_image(
             _log(uid, f"DONE in {time.time()-t0:.1f}s -> {ply_path}")
             return {"type": "splat", "path": ply_path, "job_id": uid}
     except Exception as e:
-        _log(uid if 'uid' in locals() else 'unknown', f"ERROR: {e}")
+        jid = uid if 'uid' in locals() else 'unknown'
+        _log(jid, f"ERROR: {e}\n{traceback.format_exc()}")
         return JSONResponse(status_code=500, content={"error": str(e), "job_id": (uid if 'uid' in locals() else None)})
 
 
