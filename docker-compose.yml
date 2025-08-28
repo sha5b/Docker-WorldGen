@@ -9,9 +9,13 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/data
+    env_file:
+      - .env
     environment:
       - OUTPUT_DIR=/data
       - UVICORN_PORT=8000
+      # Persist HF cache inside /data so weights are reused
+      - HF_HOME=/data/huggingface
     # Requires NVIDIA Container Toolkit and GPU support in Docker Desktop/WSL2
     # For docker-compose v2, this maps all GPUs into the container
     gpus: all

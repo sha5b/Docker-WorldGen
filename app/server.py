@@ -6,13 +6,23 @@ import threading
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import torch
 
 from worldgen import WorldGen
 
 app = FastAPI(title="WorldGen API", version="0.1")
+
+# Enable CORS so local files/apps can call the API without rebuilding the container
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/data")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -32,11 +42,24 @@ def _log(job_id: str, msg: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(_log_path(job_id), "a", encoding="utf-8") as f:
         f.write(f"[{ts}] {msg}\n")
+    # Mirror to container stdout for `docker compose logs -f`
+    print(f"[{ts}] ({job_id}) {msg}")
 
 
-def _heartbeat(job_id: str, stop_evt: threading.Event, interval: float = 5.0) -> None:
+def _heartbeat(job_id: str, t0: float, stop_evt: threading.Event, interval: float = 2.0) -> None:
     while not stop_evt.is_set():
-        _log(job_id, "heartbeat: running")
+        elapsed = time.time() - t0
+        cuda = torch.cuda.is_available()
+        mem = None
+        if cuda:
+            try:
+                mem = {
+                    "alloc": torch.cuda.memory_allocated() // (1024*1024),
+                    "reserved": torch.cuda.memory_reserved() // (1024*1024),
+                }
+            except Exception:
+                mem = None
+        _log(job_id, f"heartbeat: running, elapsed={elapsed:.1f}s" + (f", cuda_mem(MB)={mem}" if mem else ""))
         stop_evt.wait(interval)
 
 
@@ -56,9 +79,9 @@ async def generate_text(
         uid = str(uuid.uuid4())
         _log(uid, f"START text generation: low_vram={low_vram} return_mesh={return_mesh} inpaint_bg={inpaint_bg}")
         hb_stop = threading.Event()
-        hb_thr = threading.Thread(target=_heartbeat, args=(uid, hb_stop), daemon=True)
-        hb_thr.start()
         t0 = time.time()
+        hb_thr = threading.Thread(target=_heartbeat, args=(uid, t0, hb_stop), daemon=True)
+        hb_thr.start()
 
         worldgen = WorldGen(mode="t2s", device=_device(), low_vram=low_vram, inpaint_bg=inpaint_bg)
         _log(uid, "WorldGen initialized")
@@ -158,14 +181,6 @@ def root():
     return {"service": "worldgen", "health": "/healthz", "endpoints": ["POST /generate/text", "POST /generate/image"]}
 
 
-@app.get("/ui", response_class=HTMLResponse)
-def ui():
-    """Serve a minimal HTML UI for text/image generation without extra packages."""
-    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
-    if os.path.exists(index_path):
-        with open(index_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    return HTMLResponse("<h1>WorldGen UI missing</h1><p>index.html not found.</p>", status_code=500)
 
 
 @app.get("/files")

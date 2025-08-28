@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WorldGen Local UI</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; color: #111; }
+    h1 { margin-bottom: 4px; }
+    .muted { color: #666; margin-top: 0; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display:block; font-weight:600; margin: 8px 0 4px; }
+    input[type="text"], textarea { width: 100%; padding: 8px; border:1px solid #ccc; border-radius:6px; }
+    input[type="file"]{ margin: 8px 0; }
+    button { background:#111; color:#fff; border:none; padding:10px 14px; border-radius:6px; cursor:pointer; }
+    button:disabled{ opacity: .6; cursor: not-allowed; }
+    .row { display:flex; gap:16px; flex-wrap: wrap; }
+    .col { flex:1 1 320px; }
+    .status { white-space: pre-wrap; background:#f8f8f8; border:1px solid #eee; padding:10px; border-radius:6px; }
+    ul { padding-left: 18px; }
+    .hint { font-size: 12px; color:#666; }
+    .pill { display:inline-block; background:#eef; color:#225; padding:2px 6px; border-radius:999px; font-size:12px; margin-left:6px; }
+    .loading { display:flex; align-items:center; gap:8px; }
+    .spinner { width:12px; height:12px; border:2px solid #ccc; border-top-color:#111; border-radius:50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .logs { background:#0b1022; color:#cfe3ff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; padding:10px; border-radius:6px; height:160px; overflow:auto; border:1px solid #1a275a; }
+  </style>
+</head>
+<body>
+  <h1>WorldGen (Local UI)</h1>
+  <p class="muted">This page talks to the Dockerized API at <code id="apiBaseLabel">http://localhost:8000</code>. No rebuild needed.</p>
+
+  <div class="card">
+    <label>API base URL</label>
+    <input type="text" id="api_base" value="http://localhost:8000" />
+  </div>
+
+  <div class="row">
+    <div class="col card">
+      <h2>Text → Scene <span class="pill">POST /generate/text</span></h2>
+      <label>Prompt</label>
+      <textarea id="t_prompt" rows="3" placeholder="A cozy wooden cabin in a snowy forest at night, warm lights"></textarea>
+      <div>
+        <label><input type="checkbox" id="t_lowvram" checked> low_vram</label>
+        <label><input type="checkbox" id="t_return_mesh"> return_mesh</label>
+        <label><input type="checkbox" id="t_inpaint"> inpaint_bg</label>
+      </div>
+      <button id="t_btn">Generate</button>
+      <div class="loading" id="t_loading" style="display:none; margin-top:10px"><div class="spinner"></div><div>Running… <span id="t_elapsed">0.0s</span></div></div>
+      <div id="t_status" class="status" style="margin-top:10px; display:none"></div>
+      <div class="logs" id="t_logs" style="display:none; margin-top:10px"></div>
+    </div>
+
+    <div class="col card">
+      <h2>Image → Scene <span class="pill">POST /generate/image</span></h2>
+      <label>Image file</label>
+      <input type="file" id="i_file" accept="image/*" />
+      <label>Optional prompt</label>
+      <input type="text" id="i_prompt" placeholder="Describe the image / scene (optional)" />
+      <div>
+        <label><input type="checkbox" id="i_lowvram" checked> low_vram</label>
+        <label><input type="checkbox" id="i_return_mesh"> return_mesh</label>
+        <label><input type="checkbox" id="i_inpaint"> inpaint_bg</label>
+      </div>
+      <button id="i_btn">Generate</button>
+      <div class="loading" id="i_loading" style="display:none; margin-top:10px"><div class="spinner"></div><div>Running… <span id="i_elapsed">0.0s</span></div></div>
+      <div id="i_status" class="status" style="margin-top:10px; display:none"></div>
+      <div class="logs" id="i_logs" style="display:none; margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Generated files <span class="pill">GET /files</span></h2>
+    <button id="refresh">Refresh list</button>
+    <div class="hint">Click to download. Files are saved under your mounted <code>./data</code>.</div>
+    <ul id="files"></ul>
+  </div>
+
+  <script>
+    const statusBox = (el, obj) => { el.style.display = 'block'; el.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
+    const startTimer = (el) => {
+      const t0 = Date.now();
+      el.textContent = '0.0s';
+      const id = setInterval(() => { el.textContent = ((Date.now()-t0)/1000).toFixed(1) + 's'; }, 100);
+      return () => clearInterval(id);
+    };
+    const apiBase = () => document.getElementById('api_base').value.replace(/\/$/, '');
+    const attachSSE = (jobId, logsEl) => {
+      try {
+        logsEl.style.display = 'block';
+        logsEl.textContent = '';
+        const es = new EventSource(`${apiBase()}/jobs/${jobId}/logs`);
+        es.onmessage = (e) => { logsEl.textContent += e.data + '\n'; logsEl.scrollTop = logsEl.scrollHeight; };
+        es.onerror = () => { es.close(); };
+        return es;
+      } catch (_) { return null; }
+    };
+
+    document.getElementById('t_btn').onclick = async () => {
+      const btn = document.getElementById('t_btn');
+      btn.disabled = true;
+      const form = new FormData();
+      form.append('prompt', document.getElementById('t_prompt').value || '');
+      form.append('low_vram', document.getElementById('t_lowvram').checked);
+      form.append('return_mesh', document.getElementById('t_return_mesh').checked);
+      form.append('inpaint_bg', document.getElementById('t_inpaint').checked);
+      const loading = document.getElementById('t_loading');
+      const elapsedEl = document.getElementById('t_elapsed');
+      loading.style.display = 'flex';
+      const stopTimer = startTimer(elapsedEl);
+      let es = null;
+      try {
+        const res = await fetch(`${apiBase()}/generate/text`, { method: 'POST', body: form });
+        const data = await res.json();
+        statusBox(document.getElementById('t_status'), data);
+        if (data.job_id) { es = attachSSE(data.job_id, document.getElementById('t_logs')); }
+        loadFiles();
+      } catch (e) {
+        statusBox(document.getElementById('t_status'), String(e));
+      } finally { btn.disabled = false; stopTimer(); loading.style.display = 'none'; if (es) setTimeout(() => es.close(), 15000); }
+    };
+
+    document.getElementById('i_btn').onclick = async () => {
+      const btn = document.getElementById('i_btn');
+      btn.disabled = true;
+      const f = document.getElementById('i_file').files[0];
+      if (!f) { alert('Please choose an image'); btn.disabled = false; return; }
+      const form = new FormData();
+      form.append('image', f);
+      const p = document.getElementById('i_prompt').value;
+      if (p) form.append('prompt', p);
+      form.append('low_vram', document.getElementById('i_lowvram').checked);
+      form.append('return_mesh', document.getElementById('i_return_mesh').checked);
+      form.append('inpaint_bg', document.getElementById('i_inpaint').checked);
+      const loading = document.getElementById('i_loading');
+      const elapsedEl = document.getElementById('i_elapsed');
+      loading.style.display = 'flex';
+      const stopTimer = startTimer(elapsedEl);
+      let es = null;
+      try {
+        const res = await fetch(`${apiBase()}/generate/image`, { method: 'POST', body: form });
+        const data = await res.json();
+        statusBox(document.getElementById('i_status'), data);
+        if (data.job_id) { es = attachSSE(data.job_id, document.getElementById('i_logs')); }
+        loadFiles();
+      } catch (e) {
+        statusBox(document.getElementById('i_status'), String(e));
+      } finally { btn.disabled = false; stopTimer(); loading.style.display = 'none'; if (es) setTimeout(() => es.close(), 15000); }
+    };
+
+    async function loadFiles() {
+      try {
+        const res = await fetch(`${apiBase()}/files`);
+        const data = await res.json();
+        const ul = document.getElementById('files');
+        ul.innerHTML = '';
+        (data.files || []).forEach(f => {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = `${apiBase()}${f.download}`;
+          a.textContent = `${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
+          a.download = f.name;
+          li.appendChild(a);
+          ul.appendChild(li);
+        });
+      } catch (e) {
+        console.warn('Failed to load files', e);
+      }
+    }
+
+    document.getElementById('refresh').onclick = loadFiles;
+    loadFiles();
+  </script>
+</body>
+</html>

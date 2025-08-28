@@ -43,13 +43,12 @@ RUN pip install --extra-index-url https://miropsota.github.io/torch_packages_bui
 # Note: WorldGen depends on some git packages and specific wheels.
 RUN pip install .
 
-# API server deps
-RUN pip install fastapi uvicorn[standard] python-multipart Pillow
+# API server deps (include hf_transfer for fast HF downloads)
+RUN pip install fastapi uvicorn[standard] python-multipart Pillow hf_transfer
 
 # Add our API server
 WORKDIR /app
 COPY app/server.py /app/server.py
-COPY app/static /app/static
 
 # Data directory for outputs
 RUN mkdir -p /data
