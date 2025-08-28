@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  worldgen-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: worldgen-api:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - OUTPUT_DIR=/data
+      - UVICORN_PORT=8000
+    # Requires NVIDIA Container Toolkit and GPU support in Docker Desktop/WSL2
+    # For docker-compose v2, this maps all GPUs into the container
+    gpus: all
+    # For docker run users: docker run --gpus all -p 8000:8000 -v %cd%/data:/data worldgen-api:latest

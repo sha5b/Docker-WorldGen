@@ -1,0 +1,49 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# App runtime outputs
+/data/
+!/data/.gitkeep
+/data/**
+
+# WorldGen specific
+app/static/*.map
+app/static/*.tmp
+
+# Docker
+*.pid
+*.seed
+
+# Node (if ever used for UI tooling)
+node_modules/
